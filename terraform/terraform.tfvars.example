@@ -1,4 +1,0 @@
-# Copy this to terraform.tfvars and fill in
-
-db_password = "CHANGE_ME_TO_STRONG_PASSWORD"
-my_ip = "YOUR_IP_HERE/32"
