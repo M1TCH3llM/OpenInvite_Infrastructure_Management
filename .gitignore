@@ -1,13 +1,11 @@
 # Terraform
-**/.terraform/*
+.terraform/
 *.tfstate
-*.tfstate.*
-crash.log
-crash.*.log
-*.tfvars
-*.tfvars.json
-override.tf
-override.tf.json
-*_override.tf
-*_override.tf.json
-.terraform.lock.hcl
+*.tfstate.backup
+*.tfplanx
+**/.terraform/**
+**/darwin_arm64/**
+**/linux_amd64/**
+
+# OS files
+.DS_Store
