@@ -1,0 +1,78 @@
+---
+- name: Deploy React Frontend (Pre-built)
+  hosts: frontend
+  become: yes
+  
+  vars:
+    app_dir: /var/www/open-invite
+  
+  tasks:
+    - name: Install Nginx
+      apt:
+        name: nginx
+        state: present
+        update_cache: yes
+    
+    - name: Create app directory
+      file:
+        path: "{{ app_dir }}"
+        state: directory
+        owner: www-data
+        group: www-data
+        mode: '0755'
+    
+    - name: Copy build folder
+      synchronize:
+        src: ../../../frontend/build/
+        dest: "{{ app_dir }}/"
+        delete: yes
+    
+    - name: Fix ownership
+      file:
+        path: "{{ app_dir }}"
+        owner: www-data
+        group: www-data
+        recurse: yes
+    
+    - name: Remove default nginx site
+      file:
+        path: /etc/nginx/sites-enabled/default
+        state: absent
+    
+    - name: Create nginx config
+      copy:
+        content: |
+          server {
+              listen 80;
+              server_name _;
+              
+              root {{ app_dir }};
+              index index.html;
+              
+              location / {
+                  try_files $uri $uri/ /index.html;
+              }
+              
+              location /api {
+                  proxy_pass http://{{ hostvars['backend_server']['ansible_host'] }}:8080/api;
+                  proxy_set_header Host $host;
+                  proxy_set_header X-Real-IP $remote_addr;
+                  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+              }
+          }
+        dest: /etc/nginx/sites-available/open-invite
+    
+    - name: Enable nginx site
+      file:
+        src: /etc/nginx/sites-available/open-invite
+        dest: /etc/nginx/sites-enabled/open-invite
+        state: link
+    
+    - name: Test nginx config
+      command: nginx -t
+    
+    - name: Restart nginx
+      systemd:
+        name: nginx
+        state: restarted
+        enabled: yes

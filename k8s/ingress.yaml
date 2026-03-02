@@ -1,0 +1,51 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: open-invite-ingress
+  namespace: frontend          # Ingress lives in one namespace but can route across
+  annotations:
+    # Tell K8s to use the AWS ALB controller
+    kubernetes.io/ingress.class: alb
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+
+    # Health check settings (similar to what you had before)
+    alb.ingress.kubernetes.io/healthcheck-path: /
+    alb.ingress.kubernetes.io/healthcheck-interval-seconds: "30"
+    alb.ingress.kubernetes.io/healthcheck-timeout-seconds: "5"
+
+    # Optional: force HTTPS (uncomment when you add a certificate)
+    # alb.ingress.kubernetes.io/listen-ports: '[{"HTTPS":443}]'
+    # alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:us-east-1:ACCOUNT:certificate/CERT-ID
+  labels:
+    app: open-invite
+spec:
+  rules:
+    - http:
+        paths:
+          # Backend API routes
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: open-invite-backend
+                port:
+                  number: 8080
+
+          # Actuator health endpoint (useful for monitoring)
+          - path: /actuator
+            pathType: Prefix
+            backend:
+              service:
+                name: open-invite-backend
+                port:
+                  number: 8080
+
+          # Everything else goes to frontend
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: open-invite-frontend
+                port:
+                  number: 80

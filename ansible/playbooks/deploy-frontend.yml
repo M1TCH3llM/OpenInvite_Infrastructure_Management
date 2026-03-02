@@ -1,0 +1,130 @@
+---
+- name: Deploy React Frontend
+  hosts: frontend
+  become: yes
+  
+  vars:
+    app_dir: /var/www/open-invite
+  
+  tasks:
+    - name: Install curl and ca-certificates
+      apt:
+        name:
+          - curl
+          - ca-certificates
+        state: present
+        update_cache: yes
+    
+    - name: Add NodeSource repository for Node.js 18
+      shell: |
+        curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
+      args:
+        creates: /etc/apt/sources.list.d/nodesource.list
+    
+    - name: Install Node.js 18
+      apt:
+        name: nodejs
+        state: present
+        update_cache: yes
+    
+    - name: Create app directory
+      file:
+        path: "{{ app_dir }}"
+        state: directory
+        owner: ubuntu
+        group: ubuntu
+        mode: '0755'
+    
+    - name: Copy frontend code
+      synchronize:
+        src: ../../../frontend/
+        dest: "{{ app_dir }}/source/"
+        delete: yes
+        rsync_opts:
+          - "--exclude=node_modules"
+          - "--exclude=build"
+          - "--exclude=.git"
+    
+    - name: Fix ownership of source directory
+      file:
+        path: "{{ app_dir }}/source"
+        owner: ubuntu
+        group: ubuntu
+        recurse: yes
+    
+    - name: Remove old node_modules if exists
+      file:
+        path: "{{ app_dir }}/source/node_modules"
+        state: absent
+    
+    - name: Remove package-lock.json if exists
+      file:
+        path: "{{ app_dir }}/source/package-lock.json"
+        state: absent
+    
+    - name: Create .env file
+      copy:
+        content: |
+          REACT_APP_API_URL=http://{{ hostvars['backend_server']['ansible_host'] }}:8080/api
+        dest: "{{ app_dir }}/source/.env"
+        owner: ubuntu
+        group: ubuntu
+    
+    - name: Install npm dependencies
+      command: npm install
+      args:
+        chdir: "{{ app_dir }}/source"
+      become_user: ubuntu
+    
+    - name: Build React app
+      command: npm run build
+      args:
+        chdir: "{{ app_dir }}/source"
+      become_user: ubuntu
+      environment:
+        NODE_OPTIONS: "--max-old-space-size=2048"
+    
+    - name: Install Nginx
+      apt:
+        name: nginx
+        state: present
+    
+    - name: Remove default nginx site
+      file:
+        path: /etc/nginx/sites-enabled/default
+        state: absent
+    
+    - name: Create nginx config
+      copy:
+        content: |
+          server {
+              listen 80;
+              server_name _;
+              
+              root {{ app_dir }}/source/build;
+              index index.html;
+              
+              location / {
+                  try_files $uri $uri/ /index.html;
+              }
+              
+              location /api {
+                  proxy_pass http://{{ hostvars['backend_server']['ansible_host'] }}:8080/api;
+                  proxy_set_header Host $host;
+                  proxy_set_header X-Real-IP $remote_addr;
+                  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+              }
+          }
+        dest: /etc/nginx/sites-available/open-invite
+    
+    - name: Enable nginx site
+      file:
+        src: /etc/nginx/sites-available/open-invite
+        dest: /etc/nginx/sites-enabled/open-invite
+        state: link
+    
+    - name: Restart nginx
+      systemd:
+        name: nginx
+        state: restarted
+        enabled: yes

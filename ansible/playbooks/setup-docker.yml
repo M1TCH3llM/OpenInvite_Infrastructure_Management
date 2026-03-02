@@ -1,0 +1,30 @@
+---
+- name: Install Docker on Backend Servers
+  hosts: backend
+  become: yes
+  
+  tasks:
+    - name: Install Docker
+      shell: curl -fsSL https://get.docker.com | sh
+      args:
+        creates: /usr/bin/docker
+    
+    - name: Add ubuntu user to docker group
+      user:
+        name: ubuntu
+        groups: docker
+        append: yes
+    
+    - name: Start and enable Docker
+      systemd:
+        name: docker
+        state: started
+        enabled: yes
+    
+    - name: Verify Docker installation
+      command: docker --version
+      register: docker_version
+    
+    - name: Display Docker version
+      debug:
+        msg: "{{ docker_version.stdout }}"

@@ -1,0 +1,8 @@
+backend_public_ip = "54.209.129.79"
+backend_url = "http://54.209.129.79:8080"
+database_address = "open-invite-staging-db.c07umimsy4fb.us-east-1.rds.amazonaws.com"
+database_endpoint = "open-invite-staging-db.c07umimsy4fb.us-east-1.rds.amazonaws.com:5432"
+frontend_public_ip = "54.242.253.58"
+frontend_url = "http://54.242.253.58"
+ssh_backend = "ssh -i ~/.ssh/open-invite-key ubuntu@54.209.129.79"
+ssh_frontend = "ssh -i ~/.ssh/open-invite-key ubuntu@54.242.253.58"

@@ -1,0 +1,90 @@
+// ============================================================
+// OpenInvite Infrastructure — Jenkins Pipeline
+// ============================================================
+// Put this file as 'Jenkinsfile' in the ROOT of your
+// OpenInvite_Infrastructure GitHub repo.
+//
+// This pipeline handles Terraform changes to your EKS cluster.
+// It runs 'terraform plan' automatically but requires MANUAL
+// approval before 'terraform apply' for safety.
+//
+// Triggers:
+//   - Automatically on push (plan only)
+//   - Manual approval required for apply
+// ============================================================
+
+pipeline {
+    agent any
+
+    environment {
+        AWS_REGION   = 'us-east-1'
+        TF_DIR       = 'terraform/eks-setup'
+    }
+
+    triggers {
+        pollSCM('H/2 * * * *')
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                git branch: 'main',
+                    url: 'https://github.com/M1TCH3llM/OpenInvite_Infrastructure.git'
+            }
+        }
+
+        stage('Terraform Init') {
+            steps {
+                dir("${TF_DIR}") {
+                    sh 'terraform init -input=false'
+                }
+            }
+        }
+
+        stage('Terraform Plan') {
+            steps {
+                dir("${TF_DIR}") {
+                    sh 'terraform plan -out=tfplan -input=false'
+                }
+            }
+        }
+
+        stage('Approval') {
+            steps {
+                // This pauses the pipeline and waits for you to
+                // click "Approve" in Jenkins before applying changes.
+                // This is a safety net — you never want Terraform
+                // to auto-apply infrastructure changes without review.
+                input message: 'Review the Terraform plan above. Apply changes?',
+                      ok: 'Apply'
+            }
+        }
+
+        stage('Terraform Apply') {
+            steps {
+                dir("${TF_DIR}") {
+                    sh 'terraform apply -input=false tfplan'
+                }
+            }
+        }
+
+        stage('Update kubeconfig') {
+            steps {
+                sh """
+                    aws eks update-kubeconfig \
+                        --region ${AWS_REGION} \
+                        --name staging-eks-cluster
+                """
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "Infrastructure updated successfully!"
+        }
+        failure {
+            echo "Infrastructure update failed!"
+        }
+    }
+}

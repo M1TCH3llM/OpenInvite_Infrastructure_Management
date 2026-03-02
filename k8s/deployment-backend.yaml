@@ -1,0 +1,93 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: open-invite-backend
+  namespace: backend
+  labels:
+    app: open-invite
+    component: backend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: open-invite
+      component: backend
+  template:
+    metadata:
+      labels:
+        app: open-invite
+        component: backend
+    spec:
+      containers:
+        - name: backend
+          image: 094840069693.dkr.ecr.us-east-1.amazonaws.com/open-invite/backend:latest
+          ports:
+            - containerPort: 8080
+
+          env:
+            - name: SPRING_PROFILES_ACTIVE
+              value: "production"
+            - name: SPRING_DATASOURCE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: backend-secrets
+                  key: database-url
+            - name: SPRING_DATASOURCE_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: backend-secrets
+                  key: database-username
+            - name: SPRING_DATASOURCE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: backend-secrets
+                  key: database-password
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: backend-secrets
+                  key: jwt-secret
+            - name: JAVA_TOOL_OPTIONS
+              value: "-Dcors.allowed-origins=http://k8s-backend-openinvi-27984f8a7e-2069352124.us-east-1.elb.amazonaws.com"
+
+          livenessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8080
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            failureThreshold: 3
+
+          readinessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
+
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "500m"
+              memory: "1Gi"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: open-invite-backend
+  namespace: backend
+  labels:
+    app: open-invite
+    component: backend
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8080
+      targetPort: 8080
+      protocol: TCP
+  selector:
+    app: open-invite
+    component: backend

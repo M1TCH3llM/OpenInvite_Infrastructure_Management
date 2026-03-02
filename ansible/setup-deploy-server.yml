@@ -1,0 +1,234 @@
+
+---
+- name: Setup Deployment Server
+  hosts: all
+  become: yes
+
+  vars:
+    terraform_version: "1.7.4"
+    kubectl_version: "1.29.0"
+    eks_cluster_name: "staging-eks-cluster"
+    aws_region: "us-east-1"
+    github_repos:
+      - name: OpenInvite_Frontend
+        url: https://github.com/M1TCH3llM/OpenInvite_Frontend.git
+      - name: OpenInvite_Backend
+        url: https://github.com/M1TCH3llM/OpenInvite_Backend.git
+      - name: OpenInvite_Infrastructure
+        url: https://github.com/M1TCH3llM/OpenInvite_Infrastructure.git
+
+  tasks:
+    # ======================================================
+    # Basic packages
+    # ======================================================
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+
+    - name: Install base packages
+      apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - gnupg
+          - lsb-release
+          - software-properties-common
+          - unzip
+          - jq
+          - git
+          - openjdk-17-jdk
+          - maven
+        state: present
+
+    # ======================================================
+    # Docker
+    # ======================================================
+    - name: Add Docker GPG key
+      shell: |
+        curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+      args:
+        creates: /usr/share/keyrings/docker-archive-keyring.gpg
+
+    - name: Add Docker repository
+      shell: |
+        echo "deb [arch=amd64 signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list
+      args:
+        creates: /etc/apt/sources.list.d/docker.list
+
+    - name: Install Docker
+      apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-buildx-plugin
+        state: present
+        update_cache: yes
+
+    - name: Start Docker
+      systemd:
+        name: docker
+        state: started
+        enabled: yes
+
+    # ======================================================
+    # Jenkins
+    # ======================================================
+    - name: Add Jenkins GPG key
+      shell: |
+        curl -fsSL https://pkg.jenkins.io/debian-stable/jenkins.io-2023.key | tee /usr/share/keyrings/jenkins-keyring.asc
+      args:
+        creates: /usr/share/keyrings/jenkins-keyring.asc
+
+    - name: Add Jenkins repository
+      shell: |
+        echo "deb [signed-by=/usr/share/keyrings/jenkins-keyring.asc] https://pkg.jenkins.io/debian-stable binary/" | tee /etc/apt/sources.list.d/jenkins.list
+      args:
+        creates: /etc/apt/sources.list.d/jenkins.list
+
+    - name: Install Jenkins
+      apt:
+        name: jenkins
+        state: present
+        update_cache: yes
+
+    - name: Add Jenkins user to Docker group
+      user:
+        name: jenkins
+        groups: docker
+        append: yes
+
+    - name: Start Jenkins
+      systemd:
+        name: jenkins
+        state: started
+        enabled: yes
+
+    # ======================================================
+    # Terraform
+    # ======================================================
+    - name: Install Terraform
+      shell: |
+        wget -q https://releases.hashicorp.com/terraform/{{ terraform_version }}/terraform_{{ terraform_version }}_linux_amd64.zip
+        unzip terraform_{{ terraform_version }}_linux_amd64.zip -d /usr/local/bin/
+        rm terraform_{{ terraform_version }}_linux_amd64.zip
+      args:
+        creates: /usr/local/bin/terraform
+
+    # ======================================================
+    # kubectl
+    # ======================================================
+    - name: Install kubectl
+      shell: |
+        curl -LO "https://dl.k8s.io/release/v{{ kubectl_version }}/bin/linux/amd64/kubectl"
+        chmod +x kubectl
+        mv kubectl /usr/local/bin/
+      args:
+        creates: /usr/local/bin/kubectl
+
+    # ======================================================
+    # AWS CLI v2
+    # ======================================================
+    - name: Install AWS CLI v2
+      shell: |
+        curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+        unzip awscliv2.zip
+        ./aws/install
+        rm -rf awscliv2.zip aws
+      args:
+        creates: /usr/local/bin/aws
+
+    # ======================================================
+    # Configure kubectl for EKS (for Jenkins user)
+    # ======================================================
+    - name: Create .kube directory for Jenkins
+      file:
+        path: /var/lib/jenkins/.kube
+        state: directory
+        owner: jenkins
+        group: jenkins
+
+    - name: Configure kubectl for EKS (Jenkins user)
+      shell: |
+        aws eks update-kubeconfig --region {{ aws_region }} --name {{ eks_cluster_name }} --kubeconfig /var/lib/jenkins/.kube/config
+      environment:
+        HOME: /var/lib/jenkins
+      become_user: jenkins
+      ignore_errors: yes
+
+    # ======================================================
+    # Configure kubectl for EKS (ubuntu user)
+    # ======================================================
+    - name: Create .kube directory for ubuntu
+      file:
+        path: /home/ubuntu/.kube
+        state: directory
+        owner: ubuntu
+        group: ubuntu
+
+    - name: Configure kubectl for EKS (ubuntu user)
+      shell: |
+        aws eks update-kubeconfig --region {{ aws_region }} --name {{ eks_cluster_name }}
+      become_user: ubuntu
+      ignore_errors: yes
+
+    # ======================================================
+    # Add ubuntu user to Docker group
+    # ======================================================
+    - name: Add ubuntu to Docker group
+      user:
+        name: ubuntu
+        groups: docker
+        append: yes
+
+    # ======================================================
+    # Clone repos (for initial setup)
+    # ======================================================
+    - name: Create workspace directory
+      file:
+        path: /opt/open-invite
+        state: directory
+        owner: jenkins
+        group: jenkins
+        mode: "0755"
+
+    # ======================================================
+    # Get Jenkins initial password
+    # ======================================================
+    - name: Wait for Jenkins to start
+      wait_for:
+        port: 8080
+        delay: 10
+        timeout: 120
+
+    - name: Get Jenkins initial admin password
+      command: cat /var/lib/jenkins/secrets/initialAdminPassword
+      register: jenkins_password
+
+    - name: Display Jenkins initial password
+      debug:
+        msg: |
+          ============================================
+          Jenkins is ready!
+          URL: http://{{ ansible_host }}:8080
+          Initial Admin Password: {{ jenkins_password.stdout }}
+          ============================================
+
+    # ======================================================
+    # Verify installations
+    # ======================================================
+    - name: Verify all tools
+      shell: |
+        echo "=== Docker ===" && docker --version
+        echo "=== Terraform ===" && terraform --version
+        echo "=== kubectl ===" && kubectl version --client
+        echo "=== AWS CLI ===" && aws --version
+        echo "=== Java ===" && java -version 2>&1
+        echo "=== Maven ===" && mvn --version
+        echo "=== Git ===" && git --version
+      register: tool_versions
+
+    - name: Show installed tools
+      debug:
+        msg: "{{ tool_versions.stdout }}"
