@@ -1,0 +1,378 @@
+# ============================================================
+# Setup 2-Node Kafka Cluster (KRaft Mode — No ZooKeeper)
+# ============================================================
+# Run with:
+#   ansible-playbook -i inventory.ini \
+#     --private-key ~/.ssh/open-invite-key \
+#     setup-kafka.yml \
+#     -e "kafka1_private_ip=<IP>" \
+#     -e "kafka2_private_ip=<IP>" \
+#     -e "kafka1_public_ip=<IP>" \
+#     -e "kafka2_public_ip=<IP>"
+# ============================================================
+
+---
+- name: Setup Kafka Cluster (KRaft Mode)
+  hosts: all
+  become: yes
+
+  vars:
+    kafka_version: "3.9.2"
+    scala_version: "2.13"
+    kafka_dir: "/opt/kafka"
+    kafka_data_dir: "/opt/kafka-data"
+    kafka_log_dir: "/var/log/kafka"
+    java_home: "/usr/lib/jvm/java-17-openjdk-amd64"
+
+  tasks:
+    # ======================================================
+    # System Setup
+    # ======================================================
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+
+    - name: Upgrade packages
+      apt:
+        upgrade: dist
+        autoremove: yes
+
+    - name: Install Java 17
+      apt:
+        name: openjdk-17-jdk
+        state: present
+
+    - name: Verify Java
+      command: java -version
+      register: java_ver
+      changed_when: false
+
+    - name: Show Java version
+      debug:
+        msg: "{{ java_ver.stderr }}"
+
+    # ======================================================
+    # Kafka User & Directories
+    # ======================================================
+    - name: Create kafka system user
+      user:
+        name: kafka
+        system: yes
+        shell: /bin/false
+        create_home: no
+
+    - name: Create Kafka directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: kafka
+        group: kafka
+        mode: "0755"
+      loop:
+        - "{{ kafka_data_dir }}"
+        - "{{ kafka_log_dir }}"
+
+    # ======================================================
+    # Download & Install Kafka
+    # ======================================================
+    - name: Check if Kafka is already installed
+      stat:
+        path: "{{ kafka_dir }}/bin/kafka-server-start.sh"
+      register: kafka_installed
+
+    - name: Download Kafka
+      get_url:
+        url: "https://downloads.apache.org/kafka/{{ kafka_version }}/kafka_{{ scala_version }}-{{ kafka_version }}.tgz"
+        dest: "/tmp/kafka.tgz"
+        timeout: 120
+      when: not kafka_installed.stat.exists
+
+    - name: Extract Kafka
+      unarchive:
+        src: "/tmp/kafka.tgz"
+        dest: "/tmp/"
+        remote_src: yes
+      when: not kafka_installed.stat.exists
+
+    - name: Move Kafka to /opt
+      command: "mv /tmp/kafka_{{ scala_version }}-{{ kafka_version }} {{ kafka_dir }}"
+      when: not kafka_installed.stat.exists
+
+    - name: Clean up download
+      file:
+        path: "/tmp/kafka.tgz"
+        state: absent
+
+    - name: Set Kafka ownership
+      file:
+        path: "{{ kafka_dir }}"
+        owner: kafka
+        group: kafka
+        recurse: yes
+
+    # ======================================================
+    # Configure Kafka — Node 1
+    # ======================================================
+    - name: Configure Kafka server.properties (Node 1)
+      copy:
+        dest: "{{ kafka_dir }}/config/kraft/server.properties"
+        owner: kafka
+        group: kafka
+        mode: "0644"
+        content: |
+          # ============================================
+          # Kafka Node 1 — KRaft Mode Configuration
+          # ============================================
+
+          # This node acts as BOTH a broker and a controller
+          process.roles=broker,controller
+          node.id=1
+
+          # Controller quorum — both nodes participate
+          controller.quorum.voters=1@{{ kafka1_private_ip }}:9093,2@{{ kafka2_private_ip }}:9093
+
+          # Listeners
+          listeners=PLAINTEXT://{{ kafka1_private_ip }}:9092,CONTROLLER://{{ kafka1_private_ip }}:9093,EXTERNAL://0.0.0.0:9094
+          advertised.listeners=PLAINTEXT://{{ kafka1_private_ip }}:9092,EXTERNAL://{{ kafka1_public_ip }}:9094
+          listener.security.protocol.map=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
+          controller.listener.names=CONTROLLER
+          inter.broker.listener.name=PLAINTEXT
+
+          # Storage
+          log.dirs={{ kafka_data_dir }}
+
+          # Cluster settings
+          num.partitions=3
+          default.replication.factor=2
+          min.insync.replicas=1
+          offsets.topic.replication.factor=2
+          transaction.state.log.replication.factor=2
+          transaction.state.log.min.isr=1
+
+          # Log retention
+          log.retention.hours=168
+          log.retention.bytes=1073741824
+          log.segment.bytes=1073741824
+          log.retention.check.interval.ms=300000
+
+          # Performance tuning for t2.medium
+          num.network.threads=3
+          num.io.threads=8
+          socket.send.buffer.bytes=102400
+          socket.receive.buffer.bytes=102400
+          socket.request.max.bytes=104857600
+
+          # Group coordinator
+          group.initial.rebalance.delay.ms=0
+      when: inventory_hostname == groups['kafka'][0]
+
+    # ======================================================
+    # Configure Kafka — Node 2
+    # ======================================================
+    - name: Configure Kafka server.properties (Node 2)
+      copy:
+        dest: "{{ kafka_dir }}/config/kraft/server.properties"
+        owner: kafka
+        group: kafka
+        mode: "0644"
+        content: |
+          # ============================================
+          # Kafka Node 2 — KRaft Mode Configuration
+          # ============================================
+
+          # This node acts as BOTH a broker and a controller
+          process.roles=broker,controller
+          node.id=2
+
+          # Controller quorum — both nodes participate
+          controller.quorum.voters=1@{{ kafka1_private_ip }}:9093,2@{{ kafka2_private_ip }}:9093
+
+          # Listeners
+          listeners=PLAINTEXT://{{ kafka2_private_ip }}:9092,CONTROLLER://{{ kafka2_private_ip }}:9093,EXTERNAL://0.0.0.0:9094
+          advertised.listeners=PLAINTEXT://{{ kafka2_private_ip }}:9092,EXTERNAL://{{ kafka2_public_ip }}:9094
+          listener.security.protocol.map=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
+          controller.listener.names=CONTROLLER
+          inter.broker.listener.name=PLAINTEXT
+
+          # Storage
+          log.dirs={{ kafka_data_dir }}
+
+          # Cluster settings
+          num.partitions=3
+          default.replication.factor=2
+          min.insync.replicas=1
+          offsets.topic.replication.factor=2
+          transaction.state.log.replication.factor=2
+          transaction.state.log.min.isr=1
+
+          # Log retention
+          log.retention.hours=168
+          log.retention.bytes=1073741824
+          log.segment.bytes=1073741824
+          log.retention.check.interval.ms=300000
+
+          # Performance tuning for t2.medium
+          num.network.threads=3
+          num.io.threads=8
+          socket.send.buffer.bytes=102400
+          socket.receive.buffer.bytes=102400
+          socket.request.max.bytes=104857600
+
+          # Group coordinator
+          group.initial.rebalance.delay.ms=0
+      when: inventory_hostname == groups['kafka'][1]
+
+    # ======================================================
+    # Generate Cluster ID & Format Storage
+    # ======================================================
+    - name: Generate Kafka Cluster UUID (only on node 1)
+      command: "{{ kafka_dir }}/bin/kafka-storage.sh random-uuid"
+      register: cluster_uuid
+      when: inventory_hostname == groups['kafka'][0]
+
+    - name: Set cluster UUID fact
+      set_fact:
+        kafka_cluster_id: "{{ cluster_uuid.stdout }}"
+      when: inventory_hostname == groups['kafka'][0]
+
+    - name: Share cluster UUID with all nodes
+      set_fact:
+        kafka_cluster_id: "{{ hostvars[groups['kafka'][0]].kafka_cluster_id }}"
+      when: inventory_hostname != groups['kafka'][0]
+
+    - name: Display Cluster UUID
+      debug:
+        msg: "Kafka Cluster UUID: {{ kafka_cluster_id }}"
+
+    - name: Format Kafka storage
+      command: >
+        sudo -u kafka {{ kafka_dir }}/bin/kafka-storage.sh format
+        -t {{ kafka_cluster_id }}
+        -c {{ kafka_dir }}/config/kraft/server.properties
+      args:
+        creates: "{{ kafka_data_dir }}/meta.properties"
+
+    # ======================================================
+    # Systemd Service
+    # ======================================================
+    - name: Create Kafka systemd service
+      copy:
+        dest: /etc/systemd/system/kafka.service
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Apache Kafka (KRaft Mode)
+          After=network.target
+
+          [Service]
+          Type=simple
+          User=kafka
+          Group=kafka
+          Environment="JAVA_HOME={{ java_home }}"
+          Environment="KAFKA_HEAP_OPTS=-Xmx1G -Xms1G"
+          ExecStart={{ kafka_dir }}/bin/kafka-server-start.sh {{ kafka_dir }}/config/kraft/server.properties
+          ExecStop={{ kafka_dir }}/bin/kafka-server-stop.sh
+          Restart=on-failure
+          RestartSec=5
+          LimitNOFILE=65536
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Reload systemd
+      systemd:
+        daemon_reload: yes
+
+    - name: Enable Kafka service
+      systemd:
+        name: kafka
+        enabled: yes
+
+    - name: Start Kafka service
+      systemd:
+        name: kafka
+        state: started
+
+    - name: Wait for Kafka to start
+      wait_for:
+        port: 9092
+        delay: 10
+        timeout: 60
+
+    # ======================================================
+    # Create Topics (only on node 1)
+    # ======================================================
+    - name: Wait for cluster to stabilize
+      pause:
+        seconds: 15
+      when: inventory_hostname == groups['kafka'][0]
+
+    - name: Create notifications topic
+      command: >
+        {{ kafka_dir }}/bin/kafka-topics.sh --create
+        --topic notifications
+        --bootstrap-server {{ kafka1_private_ip }}:9092
+        --partitions 3
+        --replication-factor 2
+      become_user: kafka
+      register: create_topic_notifications
+      failed_when: false
+      changed_when: "'Created' in create_topic_notifications.stdout"
+      when: inventory_hostname == groups['kafka'][0]
+
+    - name: Create event-invitations topic
+      command: >
+        {{ kafka_dir }}/bin/kafka-topics.sh --create
+        --topic event-invitations
+        --bootstrap-server {{ kafka1_private_ip }}:9092
+        --partitions 3
+        --replication-factor 2
+      become_user: kafka
+      register: create_topic_invitations
+      failed_when: false
+      changed_when: "'Created' in create_topic_invitations.stdout"
+      when: inventory_hostname == groups['kafka'][0]
+
+    - name: Create user-activity topic
+      command: >
+        {{ kafka_dir }}/bin/kafka-topics.sh --create
+        --topic user-activity
+        --bootstrap-server {{ kafka1_private_ip }}:9092
+        --partitions 3
+        --replication-factor 2
+      become_user: kafka
+      register: create_topic_activity
+      failed_when: false
+      changed_when: "'Created' in create_topic_activity.stdout"
+      when: inventory_hostname == groups['kafka'][0]
+
+    # ======================================================
+    # Verify
+    # ======================================================
+    - name: List all topics
+      command: >
+        {{ kafka_dir }}/bin/kafka-topics.sh --list
+        --bootstrap-server {{ kafka1_private_ip }}:9092
+      become_user: kafka
+      register: topic_list
+      when: inventory_hostname == groups['kafka'][0]
+
+    - name: Show topics
+      debug:
+        msg: "Topics: {{ topic_list.stdout_lines }}"
+      when: inventory_hostname == groups['kafka'][0]
+
+    - name: Check Kafka status
+      command: systemctl status kafka
+      register: kafka_status
+      changed_when: false
+
+    - name: Show Kafka status
+      debug:
+        msg: |
+          ============================================
+          Kafka node is running!
+          Node: {{ inventory_hostname }}
+          Cluster UUID: {{ kafka_cluster_id }}
+          Bootstrap server: {{ inventory_hostname }}:9092
+          ============================================

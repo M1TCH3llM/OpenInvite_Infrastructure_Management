@@ -1,0 +1,5 @@
+my_ip         = "76.245.196.39/32"
+key_name      = "open-invite-key"
+vpc_id        = "vpc-0b8d04e4331ba28b6"
+subnet_id_az1 = "subnet-06fea4d888c5c0c06"
+subnet_id_az2 = "subnet-0952f101168e6a688"
